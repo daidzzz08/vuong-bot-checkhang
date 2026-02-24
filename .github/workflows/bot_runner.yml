@@ -4,11 +4,11 @@ on:
   schedule:
     # Chạy mỗi 3 tiếng, quy đổi từ giờ VN (UTC+7) sang UTC
     - cron: '0 2,5,8,11,14,17,20,23 * * *'
-  workflow_dispatch: # Cho phép trigger bằng tay
+  workflow_dispatch: # Nút bấm cho phép trigger thủ công
 
 concurrency:
   group: telegram-bot-polling
-  cancel-in-progress: true # Tự động hủy task cũ nếu task mới được trigger
+  cancel-in-progress: true # Tự động hủy task cũ (nếu bị kẹt) để chạy task mới
 
 jobs:
   run-bot:
@@ -25,10 +25,11 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install python-telegram-bot httpx
+          pip install "python-telegram-bot[job-queue]" httpx
 
       - name: Run Telegram Bot
         env:
+          # Nạp secret từ bước 2 vào biến môi trường
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python bot_interactive.py
