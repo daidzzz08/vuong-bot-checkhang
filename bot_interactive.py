@@ -1,8 +1,10 @@
 import os
 import sys
 import logging
-import httpx
 from typing import Dict, Any, List, Optional
+
+from curl_cffi import requests as cffi_requests
+from curl_cffi.requests import AsyncSession
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -27,14 +29,9 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 
 async def fetch_product_data() -> Optional[List[Dict[str, Any]]]:
-    """
-    Fetch and parse data from the target API asynchronously.
-
-    Returns:
-        Optional[List[Dict[str, Any]]]: A list of product dictionaries if successful, None otherwise.
-    """
+    """Fetch and parse data from the target API asynchronously using curl_cffi."""
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with AsyncSession(impersonate="chrome120", timeout=15.0) as client:
             response = await client.get(API_URL)
             response.raise_for_status()
             data = response.json()
@@ -45,14 +42,14 @@ async def fetch_product_data() -> Optional[List[Dict[str, Any]]]:
                 logger.error("API trả về success=False. Cần kiểm tra lại API Key hoặc Endpoint.")
                 return None
 
-    except httpx.RequestError as e:
-        logger.error(f"Lỗi mạng/kết nối khi gọi API: {e}")
+    except cffi_requests.errors.RequestsError as e:
+        logger.error(f"Lỗi mạng/kết nối (curl_cffi): {repr(e)}")
         return None
     except ValueError as e:
         logger.error(f"Lỗi phân tích cú pháp JSON: {e}")
         return None
     except Exception as e:
-        logger.error(f"Lỗi không xác định khi gọi API: {e}")
+        logger.error(f"Lỗi không xác định khi gọi API: {e}", exc_info=True)
         return None
 
 
@@ -72,18 +69,16 @@ async def send_telegram_alert(context: ContextTypes.DEFAULT_TYPE, message: str) 
 
 
 async def check_api_job(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Background job to check API periodically.
-    Implements state management to prevent spam.
-    """
+    """Background job to check API periodically with verbose logging."""
     logger.info("Đang thực thi chu kỳ kiểm tra API...")
     products = await fetch_product_data()
 
-    if not products:
+    if products is None:
         logger.warning("Không lấy được dữ liệu sản phẩm. Bỏ qua chu kỳ này.")
         return
 
-    # Khởi tạo bộ nhớ tạm để lưu trạng thái nếu chưa có
+    logger.info(f"Đã lấy thành công {len(products)} sản phẩm từ API. Đang phân tích...")
+
     if "item_states" not in context.bot_data:
         context.bot_data["item_states"] = {}
         
@@ -99,25 +94,25 @@ async def check_api_job(context: ContextTypes.DEFAULT_TYPE) -> None:
             name = item.get("name", "Unknown")
             price = item.get("price", 0)
 
-            # Lấy trạng thái cũ (mặc định coi như ban đầu là 0)
             prev_qty = item_states.get(item_id, 0)
+
+            # In log giám sát tiến trình
+            logger.info(f"-> ID {item_id}: Hiện tại = {current_qty} cái | Lần trước = {prev_qty} cái")
 
             # Logic phát hiện thay đổi (State Transition)
             if current_qty > 0 and prev_qty == 0:
-                # Trạng thái: Vừa có hàng
                 in_stock_alerts.append(
                     f"✅ *{name}*\n- ID: `{item_id}`\n- Giá: {price} VND\n- Số lượng: *{current_qty}*"
                 )
             elif current_qty == 0 and prev_qty > 0:
-                # Trạng thái: Vừa hết hàng
                 out_of_stock_alerts.append(
                     f"❌ *{name}*\n- ID: `{item_id}`\n- Trạng thái: *Đã hết hàng*"
                 )
 
-            # Cập nhật trạng thái mới nhất vào bộ nhớ
+            # Cập nhật state
             item_states[item_id] = current_qty
 
-    # Gửi tin nhắn gom nhóm nếu có sự thay đổi
+    # Bắn thông báo nếu có thay đổi
     if in_stock_alerts:
         msg = "🔥 *HÀNG ĐÃ VỀ!* 🔥\n\n" + "\n\n".join(in_stock_alerts)
         await send_telegram_alert(context, msg)
@@ -141,7 +136,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handler for /check command to manually trigger API check and see current state."""
     try:
-        await update.message.reply_text("⏳ Đang kiểm tra API thủ công...")
+        await update.message.reply_text("⏳ Đang gọi API lấy số liệu trực tiếp...")
         products = await fetch_product_data()
         
         if not products:
@@ -163,9 +158,7 @@ async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def shutdown_job(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Job triggered after MAX_RUN_TIME to safely terminate the polling.
-    """
+    """Job triggered after MAX_RUN_TIME to safely terminate the polling."""
     logger.info("Đã đạt giới hạn thời gian chạy. Tiến hành Graceful Shutdown...")
     if context.application:
         context.application.stop_running()
@@ -190,7 +183,7 @@ def main() -> None:
     job_queue.run_repeating(check_api_job, interval=60, first=10)
     job_queue.run_once(shutdown_job, when=MAX_RUN_TIME)
 
-    logger.info("Khởi động Telegram Bot (Anti-Spam Mode)...")
+    logger.info("Khởi động Telegram Bot (Anti-Spam Mode) với curl_cffi...")
     
     try:
         application.run_polling(allowed_updates=Update.ALL_TYPES)
