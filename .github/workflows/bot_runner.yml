@@ -3,7 +3,7 @@ name: Telegram Bot Long Polling
 on:
   schedule:
     # Chạy mỗi 3 tiếng, quy đổi từ giờ VN (UTC+7) sang UTC
-    - cron: '0 2,5,8,11,14,17,20,23 * * *'
+#    - cron: '0 2,5,8,11,14,17,20,23 * * *'
   workflow_dispatch: # Nút bấm cho phép trigger thủ công
 
 concurrency:
